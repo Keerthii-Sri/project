@@ -1,0 +1,3 @@
+{
+  "name":"greenfleet-server","type":"module","scripts":{"dev":"node --watch src/server.js","start":"node src/server.js"},"dependencies":{"@google/genai":"latest","@supabase/supabase-js":"latest","cors":"latest","csv-parse":"latest","dotenv":"latest","express":"latest","express-rate-limit":"latest","pdfkit":"latest","zod":"latest"}
+}
