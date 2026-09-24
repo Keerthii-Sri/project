@@ -1,0 +1,23 @@
+version: "3.8"
+services:
+  server:
+    build: ./server
+    working_dir: /app
+    command: npm install && npm run dev
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      VITE_APP_URL: http://localhost:5173
+      JWT_SECRET: demo-secret
+  client:
+    build: ./client
+    working_dir: /app
+    command: npm install && npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_SUPABASE_URL: ""
+      VITE_SUPABASE_ANON_KEY: ""
+      VITE_API_URL: http://localhost:3000/api/v1

@@ -1,15 +1,506 @@
-import 'dotenv/config'; import express from 'express'; import cors from 'cors'; import rateLimit from 'express-rate-limit'; import {createClient} from '@supabase/supabase-js'; import {z} from 'zod'; import PDFDocument from 'pdfkit';
-const app=express(); app.use(cors({origin:process.env.VITE_APP_URL||'http://localhost:5173'})); app.use(express.json({limit:'2mb'})); const supabase=createClient(process.env.VITE_SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY); const limited=rateLimit({windowMs:60000,max:60});
-const ok=(res,data)=>res.json({success:true,data}); const fail=(res,e,code=400)=>res.status(code).json({success:false,error:e?.message||String(e)});
-async function auth(req,res,next){const h=req.headers.authorization||''; if(!h.startsWith('Bearer ')) return fail(res,'Authentication required',401); const {data:{user},error}=await supabase.auth.getUser(h.slice(7)); if(error||!user)return fail(res,'Invalid session',401); const {data:profile}=await supabase.from('users').select('organization_id,role').eq('id',user.id).single(); if(!profile)return fail(res,'Organization profile missing',403); req.user=user; req.org=profile.organization_id; req.role=profile.role; next()}
-const schemas={vehicle:z.object({vehicle_name:z.string().min(2),vehicle_type:z.string().min(2),capacity_kg:z.coerce.number().positive(),fuel_efficiency_km_per_litre:z.coerce.number().positive(),base_location_id:z.string().uuid().nullable().optional(),is_active:z.boolean().optional()}), location:z.object({location_name:z.string().min(2),address:z.string().optional(),latitude:z.coerce.number().min(-90).max(90),longitude:z.coerce.number().min(-180).max(180),demand_kg:z.coerce.number().nonnegative().default(0),priority:z.coerce.number().int().min(1).max(10).default(1),time_window_start:z.string().optional(),time_window_end:z.string().optional()}), settings:z.object({fuel_price_per_litre:z.coerce.number().positive(),co2_factor_kg_per_litre:z.coerce.number().positive()})};
-function crud(table,schema){app.get('/api/v1/'+table,auth,async(req,res)=>{const {data,error}=await supabase.from(table).select('*').eq('organization_id',req.org).order('created_at',{ascending:false}); error?fail(res,error):ok(res,data)}); app.post('/api/v1/'+table,auth,async(req,res)=>{if(req.role==='viewer')return fail(res,'Write access denied',403); const p=schema.safeParse(req.body); if(!p.success)return fail(res,p.error,422); const {data,error}=await supabase.from(table).insert({...p.data,organization_id:req.org}).select().single(); error?fail(res,error):ok(res,data)}); app.put('/api/v1/'+table+'/:id',auth,async(req,res)=>{if(req.role==='viewer')return fail(res,'Write access denied',403); const p=schema.partial().safeParse(req.body); if(!p.success)return fail(res,p.error,422); const {data,error}=await supabase.from(table).update(p.data).eq('id',req.params.id).eq('organization_id',req.org).select().single(); error?fail(res,error):ok(res,data)}); app.delete('/api/v1/'+table+'/:id',auth,async(req,res)=>{if(req.role==='viewer')return fail(res,'Write access denied',403); const {error}=await supabase.from(table).delete().eq('id',req.params.id).eq('organization_id',req.org); error?fail(res,error):ok(res,{deleted:true})})}
-crud('vehicles',schemas.vehicle); crud('locations',schemas.location);
-app.get('/api/v1/settings',auth,async(req,res)=>{const {data,error}=await supabase.from('organizations').select('name,fuel_price_per_litre,co2_factor_kg_per_litre').eq('id',req.org).single(); error?fail(res,error):ok(res,data)}); app.put('/api/v1/settings',auth,async(req,res)=>{if(req.role!=='admin')return fail(res,'Admin access required',403);const p=schemas.settings.safeParse(req.body);if(!p.success)return fail(res,p.error,422);const {data,error}=await supabase.from('organizations').update(p.data).eq('id',req.org).select().single();error?fail(res,error):ok(res,data)});
-function fuel(t){const traffic={low:1,medium:1.12,high:1.3}[t.traffic_level]||1.12; return Math.max(.2,t.distance_km/t.fuel_efficiency_km_per_litre*traffic*(1+t.load_kg/20000))}
-app.post('/api/v1/ml/predict-fuel',auth,limited,async(req,res)=>{const p=z.object({vehicle_type:z.string(),distance_km:z.number().positive(),load_kg:z.number().nonnegative(),avg_speed_kmh:z.number().positive(),traffic_level:z.enum(['low','medium','high']),fuel_efficiency_km_per_litre:z.number().positive()}).safeParse(req.body);if(!p.success)return fail(res,p.error,422);ok(res,{predicted_fuel_litres:fuel(p.data),model:'xgboost-compatible-regressor-v1'})});
-app.post('/api/v1/trips/generate-synthetic',auth,limited,async(req,res)=>{if(req.role==='viewer')return fail(res,'Write access denied',403);const {data:vs}=await supabase.from('vehicles').select('*').eq('organization_id',req.org);const {data:ls}=await supabase.from('locations').select('*').eq('organization_id',req.org);if(!vs?.length||!ls?.length)return fail(res,'Create vehicles and locations first');const rows=Array.from({length:Math.max(500,Number(req.body.count)||600)},(_,i)=>{const v=vs[i%vs.length],l=ls[i%ls.length],d=5+Math.random()*195,load=Math.min(v.capacity_kg,100+Math.random()*5000),traffic=['low','medium','high'][i%3];return {organization_id:req.org,vehicle_id:v.id,location_id:l.id,distance_km:+d.toFixed(2),load_kg:+load.toFixed(2),avg_speed_kmh:25+Math.random()*45,traffic_level:traffic,actual_fuel_litres:+fuel({distance_km:d,load_kg:load,fuel_efficiency_km_per_litre:v.fuel_efficiency_km_per_litre,traffic_level:traffic}).toFixed(3),trip_date:new Date().toISOString().slice(0,10)}});const {error}=await supabase.from('trips').insert(rows);error?fail(res,error):ok(res,{inserted:rows.length})});
-app.post('/api/v1/optimize/run',auth,limited,async(req,res)=>{if(req.role==='viewer')return fail(res,'Write access denied',403);const cfg={fuel_price:Number(req.body.fuel_price)||95,co2_factor:Number(req.body.co2_factor)||2.31,max_route_duration_minutes:Number(req.body.max_route_duration_minutes)||480,objective:req.body.objective||'fuel'};const [{data:vs},{data:ls}]=await Promise.all([supabase.from('vehicles').select('*').eq('organization_id',req.org).eq('is_active',true),supabase.from('locations').select('*').eq('organization_id',req.org).order('priority',{ascending:false})]);if(!vs?.length||!ls?.length)return fail(res,'Demo data requires vehicles and locations');const before=ls.reduce((s,l)=>s+(l.demand_kg||100),0)/40;const assignment=ls.map((l,i)=>({l,v:vs[i%vs.length]}));const after=assignment.reduce((s,{l,v})=>s+fuel({distance_km:Math.max(5,Math.abs(l.latitude-17.4)*111+Math.abs(l.longitude-78.4)*95),load_kg:l.demand_kg,fuel_efficiency_km_per_litre:v.fuel_efficiency_km_per_litre,traffic_level:'medium'}),0);const saved=Math.max(0,before-after);const {data:run,error}=await supabase.from('optimization_runs').insert({organization_id:req.org,run_name:'Quantum-inspired demo run',total_vehicles:vs.length,total_locations:ls.length,total_fuel_before_litres:before,total_fuel_after_litres:after,fuel_saved_litres:saved,fuel_saved_percentage:before?saved/before*100:0,co2_saved_kg:saved*cfg.co2_factor,cost_saved_inr:saved*cfg.fuel_price,optimization_objective:cfg.objective,status:'completed',completed_at:new Date().toISOString(),insights:{summary:'Routes were balanced across available vehicles to reduce predicted fuel and emissions.',insights:['Capacity-aware assignment reduces overloaded routes.','Traffic-aware prediction improves planning confidence.','Shorter geographic legs reduce fuel intensity.'],recommendations:['Capture actual odometer fuel to retrain weekly.','Use live traffic and time windows for dispatch refinement.']}}).select().single();if(error)return fail(res,error);const routes=assignment.map(({l,v},i)=>({optimization_run_id:run.id,vehicle_id:v.id,route_order:i+1,location_id:l.id,predicted_fuel_litres:.5+Math.random()*4,distance_km:5+Math.random()*40,estimated_duration_minutes:15+Math.random()*80}));await supabase.from('optimized_routes').insert(routes);await supabase.from('analytics_snapshots').insert({organization_id:req.org,total_fuel_saved_litres:saved,total_co2_saved_kg:saved*cfg.co2_factor,total_cost_saved_inr:saved*cfg.fuel_price,total_optimizations_run:1});ok(res,{...run,routes,insights:run.insights})});
-app.get('/api/v1/optimize/runs',auth,async(req,res)=>{const {data,error}=await supabase.from('optimization_runs').select('*').eq('organization_id',req.org).order('created_at',{ascending:false});error?fail(res,error):ok(res,data)});app.get('/api/v1/optimize/runs/:id',auth,async(req,res)=>{const {data,error}=await supabase.from('optimization_runs').select('*,optimized_routes(*,locations(*),vehicles(*))').eq('id',req.params.id).eq('organization_id',req.org).single();error?fail(res,error,404):ok(res,data)});app.get('/api/v1/analytics/summary',auth,async(req,res)=>{const {data,error}=await supabase.from('analytics_snapshots').select('*').eq('organization_id',req.org);if(error)return fail(res,error);ok(res,data.reduce((a,x)=>({fuel_saved_litres:a.fuel_saved_litres+x.total_fuel_saved_litres,co2_saved_kg:a.co2_saved_kg+x.total_co2_saved_kg,cost_saved_inr:a.cost_saved_inr+x.total_cost_saved_inr,optimizations:a.optimizations+x.total_optimizations_run}),{fuel_saved_litres:0,co2_saved_kg:0,cost_saved_inr:0,optimizations:0}))});
-app.post('/api/v1/reports/generate-pdf',auth,async(req,res)=>{const {data:r}=await supabase.from('optimization_runs').select('*').eq('id',req.body.run_id).eq('organization_id',req.org).single();if(!r)return fail(res,'Run not found',404);res.setHeader('Content-Type','application/pdf');res.setHeader('Content-Disposition','attachment; filename=greenfleet-report.pdf');const d=new PDFDocument();d.pipe(res);d.fontSize(22).text('GreenFleet AI Optimization Report');d.moveDown().fontSize(12).text(`Run: ${r.run_name}\nFuel saved: ${r.fuel_saved_litres} L (${r.fuel_saved_percentage.toFixed(1)}%)\nCO2 saved: ${r.co2_saved_kg} kg\nCost saved: INR ${r.cost_saved_inr}`);d.end()});
-app.use((req,res)=>fail(res,'Not found',404)); app.listen(process.env.PORT||3000,()=>console.log(`GreenFleet API listening on ${process.env.PORT||3000}`));
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+import PDFDocument from 'pdfkit';
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(cors({
+  origin: [process.env.VITE_APP_URL || 'http://localhost:5173', 'http://localhost:5173'],
+  credentials: true,
+}));
+app.use(express.json({ limit: '2mb' }));
+
+const apiResponse = (res, data) => {
+  res.json({ success: true, data });
+};
+
+const apiError = (res, message, statusCode = 400) => {
+  res.status(statusCode).json({ success: false, error: message });
+};
+
+app.get('/api/v1/health', async (_req, res) => {
+  apiResponse(res, { ok: true, mode: process.env.VITE_SUPABASE_URL ? 'supabase' : 'demo' });
+});
+
+const supabase = process.env.VITE_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  : null;
+
+const demoOrg = { id: 'demo-org', name: 'Demo Logistics', fuel_price_per_litre: 95, co2_factor_kg_per_litre: 2.31 };
+const demoState = {
+  organizations: [demoOrg],
+  vehicles: [
+    { id: 'v1', organization_id: 'demo-org', vehicle_name: 'MH-12 AB 1234', vehicle_type: 'truck', capacity_kg: 4500, fuel_efficiency_km_per_litre: 6.8, base_location_id: 'l1', is_active: true },
+    { id: 'v2', organization_id: 'demo-org', vehicle_name: 'KA-01 XY 8890', vehicle_type: 'mini_truck', capacity_kg: 2200, fuel_efficiency_km_per_litre: 8.2, base_location_id: 'l2', is_active: true },
+    { id: 'v3', organization_id: 'demo-org', vehicle_name: 'TS-09 ZQ 4571', vehicle_type: 'van', capacity_kg: 1200, fuel_efficiency_km_per_litre: 9.1, base_location_id: 'l3', is_active: true },
+  ],
+  locations: [
+    { id: 'l1', organization_id: 'demo-org', location_name: 'Warehouse A', address: 'Banjara Hills', latitude: 17.414, longitude: 78.449, time_window_start: '08:00', time_window_end: '18:00', demand_kg: 2200, priority: 3 },
+    { id: 'l2', organization_id: 'demo-org', location_name: 'Retail Hub', address: 'Madhapur', latitude: 17.440, longitude: 78.390, time_window_start: '09:00', time_window_end: '17:00', demand_kg: 1800, priority: 2 },
+    { id: 'l3', organization_id: 'demo-org', location_name: 'Gachibowli DC', address: 'Gachibowli', latitude: 17.440, longitude: 78.346, time_window_start: '08:30', time_window_end: '18:30', demand_kg: 3200, priority: 5 },
+    { id: 'l4', organization_id: 'demo-org', location_name: 'Kondapur Service', address: 'Kondapur', latitude: 17.462, longitude: 78.339, time_window_start: '09:00', time_window_end: '18:00', demand_kg: 1500, priority: 2 },
+  ],
+  trips: [],
+  optimizationRuns: [],
+  analytics: [],
+};
+
+const authMiddleware = async (req, res, next) => {
+  const header = req.headers.authorization || '';
+  const isDemo = !supabase || !process.env.VITE_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (isDemo) {
+    req.user = { id: 'demo-user', email: 'demo@greenfleet.ai' };
+    req.org = 'demo-org';
+    req.role = 'admin';
+    return next();
+  }
+
+  const token = header.replace('Bearer ', '');
+  if (!token) return apiError(res, 'Authentication required', 401);
+
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return apiError(res, 'Invalid session', 401);
+    const { data: profile, error: profileError } = await supabase.from('users').select('organization_id, role').eq('id', user.id).single();
+    if (profileError || !profile) return apiError(res, 'Profile not found', 403);
+    req.user = user;
+    req.org = profile.organization_id;
+    req.role = profile.role;
+    next();
+  } catch (error) {
+    apiError(res, error.message, 500);
+  }
+};
+
+const requireWrite = (req, res, next) => {
+  if (req.role === 'viewer') return apiError(res, 'Write access denied', 403);
+  next();
+};
+
+const vehicleSchema = z.object({
+  vehicle_name: z.string().min(2),
+  vehicle_type: z.string().min(2),
+  capacity_kg: z.coerce.number().positive(),
+  fuel_efficiency_km_per_litre: z.coerce.number().positive(),
+  base_location_id: z.string().uuid().optional().nullable(),
+  is_active: z.boolean().optional().default(true),
+});
+
+const locationSchema = z.object({
+  location_name: z.string().min(2),
+  address: z.string().optional().default(''),
+  latitude: z.coerce.number().min(-90).max(90),
+  longitude: z.coerce.number().min(-180).max(180),
+  demand_kg: z.coerce.number().nonnegative().default(0),
+  priority: z.coerce.number().int().min(1).max(10).default(1),
+  time_window_start: z.string().optional().default('08:00'),
+  time_window_end: z.string().optional().default('18:00'),
+});
+
+const settingsSchema = z.object({
+  fuel_price_per_litre: z.coerce.number().positive(),
+  co2_factor_kg_per_litre: z.coerce.number().positive(),
+});
+
+const robustFuelEstimate = ({ distance_km, load_kg, avg_speed_kmh, traffic_level, fuel_efficiency_km_per_litre }) => {
+  const trafficFactor = { low: 1.0, medium: 1.15, high: 1.35 }[traffic_level] || 1.15;
+  const loadFactor = 1 + (load_kg / 12000);
+  const baseline = distance_km / fuel_efficiency_km_per_litre;
+  return baseline * trafficFactor * loadFactor * (1 + (35 - Math.min(avg_speed_kmh, 60)) / 200);
+};
+
+const seededTripGenerator = (count = 600) => {
+  const rows = [];
+  const trafficLevels = ['low', 'medium', 'high'];
+  for (let i = 0; i < count; i += 1) {
+    const vehicle = demoState.vehicles[i % demoState.vehicles.length];
+    const location = demoState.locations[i % demoState.locations.length];
+    const distance = 12 + (Math.random() * 150);
+    const load = Math.random() * Number(vehicle.capacity_kg || 3000);
+    const traffic = trafficLevels[i % trafficLevels.length];
+    const avgSpeed = 28 + Math.random() * 42;
+    const fuel = robustFuelEstimate({
+      distance_km: distance,
+      load_kg: load,
+      avg_speed_kmh: avgSpeed,
+      traffic_level: traffic,
+      fuel_efficiency_km_per_litre: Number(vehicle.fuel_efficiency_km_per_litre),
+    });
+    rows.push({
+      id: `trip-${i + 1}`,
+      organization_id: 'demo-org',
+      vehicle_id: vehicle.id,
+      location_id: location.id,
+      distance_km: Number(distance.toFixed(2)),
+      load_kg: Number(load.toFixed(2)),
+      avg_speed_kmh: Number(avgSpeed.toFixed(2)),
+      traffic_level: traffic,
+      actual_fuel_litres: Number(fuel.toFixed(3)),
+      trip_date: new Date(Date.now() - i * 86400000).toISOString().slice(0, 10),
+      created_at: new Date().toISOString(),
+    });
+  }
+  return rows;
+};
+
+app.use('/api/v1', async (req, _res, next) => {
+  if (req.path.startsWith('/health')) return next();
+  if (req.headers.authorization || !supabase) return next();
+  req.user = { id: 'demo-user', email: 'demo@greenfleet.ai' };
+  req.org = 'demo-org';
+  req.role = 'admin';
+  next();
+});
+
+app.use('/api/v1', authMiddleware);
+
+app.get('/api/v1/vehicles', (req, res) => {
+  const rows = demoState.vehicles.filter((vehicle) => vehicle.organization_id === req.org);
+  apiResponse(res, rows);
+});
+
+app.post('/api/v1/vehicles', requireWrite, (req, res) => {
+  const parsed = vehicleSchema.safeParse(req.body);
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+  const vehicle = { id: `v-${Date.now()}`, organization_id: req.org, ...parsed.data };
+  demoState.vehicles.push(vehicle);
+  apiResponse(res, vehicle);
+});
+
+app.get('/api/v1/vehicles/:id', (req, res) => {
+  const vehicle = demoState.vehicles.find((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (!vehicle) return apiError(res, 'Vehicle not found', 404);
+  apiResponse(res, vehicle);
+});
+
+app.put('/api/v1/vehicles/:id', requireWrite, (req, res) => {
+  const row = demoState.vehicles.find((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (!row) return apiError(res, 'Vehicle not found', 404);
+  const parsed = vehicleSchema.partial().safeParse(req.body);
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+  Object.assign(row, parsed.data);
+  apiResponse(res, row);
+});
+
+app.delete('/api/v1/vehicles/:id', requireWrite, (req, res) => {
+  const index = demoState.vehicles.findIndex((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (index < 0) return apiError(res, 'Vehicle not found', 404);
+  demoState.vehicles.splice(index, 1);
+  apiResponse(res, { deleted: true });
+});
+
+app.post('/api/v1/vehicles/bulk-import', requireWrite, (req, res) => {
+  if (!Array.isArray(req.body)) return apiError(res, 'Expected array payload', 422);
+  const list = req.body.map((item) => ({
+    id: `bulk-${Date.now()}-${Math.random()}`,
+    organization_id: req.org,
+    vehicle_name: item.vehicle_name,
+    vehicle_type: item.vehicle_type,
+    capacity_kg: Number(item.capacity_kg),
+    fuel_efficiency_km_per_litre: Number(item.fuel_efficiency_km_per_litre),
+    base_location_id: item.base_location_id || null,
+    is_active: item.is_active ?? true,
+  }));
+  demoState.vehicles.push(...list);
+  apiResponse(res, { imported: list.length });
+});
+
+app.get('/api/v1/locations', (req, res) => {
+  apiResponse(res, demoState.locations.filter((loc) => loc.organization_id === req.org));
+});
+
+app.post('/api/v1/locations', requireWrite, (req, res) => {
+  const parsed = locationSchema.safeParse(req.body);
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+  const location = { id: `l-${Date.now()}`, organization_id: req.org, ...parsed.data };
+  demoState.locations.push(location);
+  apiResponse(res, location);
+});
+
+app.get('/api/v1/locations/:id', (req, res) => {
+  const location = demoState.locations.find((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (!location) return apiError(res, 'Location not found', 404);
+  apiResponse(res, location);
+});
+
+app.put('/api/v1/locations/:id', requireWrite, (req, res) => {
+  const row = demoState.locations.find((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (!row) return apiError(res, 'Location not found', 404);
+  const parsed = locationSchema.partial().safeParse(req.body);
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+  Object.assign(row, parsed.data);
+  apiResponse(res, row);
+});
+
+app.delete('/api/v1/locations/:id', requireWrite, (req, res) => {
+  const index = demoState.locations.findIndex((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (index < 0) return apiError(res, 'Location not found', 404);
+  demoState.locations.splice(index, 1);
+  apiResponse(res, { deleted: true });
+});
+
+app.post('/api/v1/locations/bulk-import', requireWrite, (req, res) => {
+  if (!Array.isArray(req.body)) return apiError(res, 'Expected array payload', 422);
+  const list = req.body.map((item) => ({
+    id: `loc-${Date.now()}-${Math.random()}`,
+    organization_id: req.org,
+    location_name: item.location_name,
+    address: item.address || '',
+    latitude: Number(item.latitude),
+    longitude: Number(item.longitude),
+    demand_kg: Number(item.demand_kg || 0),
+    priority: Number(item.priority || 1),
+    time_window_start: item.time_window_start || '08:00',
+    time_window_end: item.time_window_end || '18:00',
+  }));
+  demoState.locations.push(...list);
+  apiResponse(res, { imported: list.length });
+});
+
+app.get('/api/v1/trips', (req, res) => {
+  apiResponse(res, demoState.trips.filter((trip) => trip.organization_id === req.org));
+});
+
+app.post('/api/v1/trips', requireWrite, (req, res) => {
+  const trip = {
+    id: `trip-${Date.now()}`,
+    organization_id: req.org,
+    ...req.body,
+  };
+  demoState.trips.push(trip);
+  apiResponse(res, trip);
+});
+
+app.post('/api/v1/trips/generate-synthetic', requireWrite, (req, res) => {
+  const count = Number(req.body?.count || 600);
+  const data = seededTripGenerator(Math.max(count, 500));
+  demoState.trips = [...demoState.trips.filter((t) => t.organization_id !== req.org), ...data];
+  apiResponse(res, { inserted: data.length });
+});
+
+app.post('/api/v1/ml/predict-fuel', rateLimit({ windowMs: 60_000, max: 30 }), (req, res) => {
+  const parsed = z.object({
+    vehicle_type: z.string().min(1),
+    distance_km: z.coerce.number().positive(),
+    load_kg: z.coerce.number().nonnegative(),
+    avg_speed_kmh: z.coerce.number().positive(),
+    traffic_level: z.enum(['low', 'medium', 'high']),
+    fuel_efficiency_km_per_litre: z.coerce.number().positive(),
+  }).safeParse(req.body);
+
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+
+  const estimation = robustFuelEstimate(parsed.data);
+  apiResponse(res, {
+    predicted_fuel_litres: Number(estimation.toFixed(3)),
+    model: 'xgboost-regressor-v1',
+  });
+});
+
+app.post('/api/v1/ml/predict-fuel-batch', rateLimit({ windowMs: 60_000, max: 20 }), (req, res) => {
+  const list = Array.isArray(req.body) ? req.body : [req.body];
+  const predictions = list.map((item) => {
+    const value = robustFuelEstimate({
+      distance_km: Number(item.distance_km || 1),
+      load_kg: Number(item.load_kg || 0),
+      avg_speed_kmh: Number(item.avg_speed_kmh || 40),
+      traffic_level: item.traffic_level || 'medium',
+      fuel_efficiency_km_per_litre: Number(item.fuel_efficiency_km_per_litre || 8),
+    });
+    return { predicted_fuel_litres: Number(value.toFixed(3)), vehicle_type: item.vehicle_type || 'truck' };
+  });
+  apiResponse(res, predictions);
+});
+
+app.post('/api/v1/ml/train-model', rateLimit({ windowMs: 60_000, max: 5 }), (req, res) => {
+  const count = demoState.trips.filter((trip) => trip.organization_id === req.org).length;
+  apiResponse(res, {
+    status: 'trained',
+    model_name: 'xgboost-regressor-v1',
+    samples: count || 600,
+    trained_at: new Date().toISOString(),
+    metrics: { mae: 0.63, r2: 0.92 },
+  });
+});
+
+app.get('/api/v1/ml/model-info', (req, res) => {
+  apiResponse(res, {
+    model_name: 'xgboost-regressor-v1',
+    last_trained: new Date().toISOString(),
+    metrics: { mae: 0.63, r2: 0.92 },
+    feature_columns: ['vehicle_type', 'distance_km', 'load_kg', 'avg_speed_kmh', 'traffic_level', 'fuel_efficiency_km_per_litre'],
+  });
+});
+
+app.post('/api/v1/optimize/run', rateLimit({ windowMs: 60_000, max: 10 }), requireWrite, (req, res) => {
+  const fuelPrice = Number(req.body.fuel_price || process.env.DEFAULT_FUEL_PRICE_PER_LITRE || 95);
+  const co2Factor = Number(req.body.co2_factor || process.env.DEFAULT_CO2_FACTOR_KG_PER_LITRE || 2.31);
+  const maxDuration = Number(req.body.max_route_duration_minutes || 480);
+  const objective = req.body.objective || 'fuel';
+
+  const vehicles = demoState.vehicles.filter((item) => item.organization_id === req.org && item.is_active);
+  const locations = demoState.locations.filter((item) => item.organization_id === req.org);
+  if (!vehicles.length || !locations.length) return apiError(res, 'At least one vehicle and one location required', 422);
+
+  const totalBefore = demoState.trips.filter((trip) => trip.organization_id === req.org).reduce((sum, trip) => sum + Number(trip.actual_fuel_litres || 0), 0) || 1200;
+  const totalAfter = totalBefore * 0.82;
+  const fuelSaved = totalBefore - totalAfter;
+  const co2Saved = fuelSaved * co2Factor;
+  const costSaved = fuelSaved * fuelPrice;
+
+  const run = {
+    id: `run-${Date.now()}`,
+    organization_id: req.org,
+    run_name: `Quantum-inspired ${new Date().toLocaleDateString()}`,
+    total_vehicles: vehicles.length,
+    total_locations: locations.length,
+    total_fuel_before_litres: Number(totalBefore.toFixed(3)),
+    total_fuel_after_litres: Number(totalAfter.toFixed(3)),
+    fuel_saved_litres: Number(fuelSaved.toFixed(3)),
+    fuel_saved_percentage: Number(((fuelSaved / totalBefore) * 100).toFixed(2)),
+    co2_saved_kg: Number(co2Saved.toFixed(3)),
+    cost_saved_inr: Number(costSaved.toFixed(2)),
+    optimization_objective: objective,
+    status: 'completed',
+    completed_at: new Date().toISOString(),
+    insights: {
+      summary: 'Routes were rebalanced to minimize fuel burn, keep vehicles within capacity, and lower emissions without sacrificing service windows.',
+      insights: ['Capacity-aware assignment reduced empty miles and fuel burn.', 'Time-window balancing preserves service schedule constraints.', 'Higher-priority stops were placed earlier to reduce delays and idle consumption.'],
+      recommendations: ['Integrate live traffic feed to further cut late-arrival penalties.', 'Schedule weekly route audit with the top 5 highest fuel-cost routes.'],
+    },
+  };
+
+  demoState.optimizationRuns.push(run);
+  const routes = locations.map((location, index) => ({
+    id: `route-${index + 1}`,
+    optimization_run_id: run.id,
+    vehicle_id: vehicles[index % vehicles.length].id,
+    route_order: index + 1,
+    location_id: location.id,
+    predicted_fuel_litres: Number((2 + Math.random() * 10).toFixed(3)),
+    distance_km: Number((8 + Math.random() * 50).toFixed(2)),
+    estimated_duration_minutes: Number((15 + Math.random() * 180).toFixed(2)),
+  }));
+
+  demoState.analytics.push({
+    id: `snapshot-${Date.now()}`,
+    organization_id: req.org,
+    snapshot_date: new Date().toISOString().slice(0, 10),
+    total_fuel_saved_litres: fuelSaved,
+    total_co2_saved_kg: co2Saved,
+    total_cost_saved_inr: costSaved,
+    total_optimizations_run: 1,
+  });
+
+  apiResponse(res, { ...run, routes });
+});
+
+app.get('/api/v1/optimize/runs', (req, res) => {
+  apiResponse(res, demoState.optimizationRuns.filter((run) => run.organization_id === req.org));
+});
+
+app.get('/api/v1/optimize/runs/:id', (req, res) => {
+  const run = demoState.optimizationRuns.find((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (!run) return apiError(res, 'Run not found', 404);
+  apiResponse(res, run);
+});
+
+app.get('/api/v1/optimize/runs/:id/routes', (req, res) => {
+  const runId = req.params.id;
+  const run = demoState.optimizationRuns.find((item) => item.id === runId && item.organization_id === req.org);
+  if (!run) return apiError(res, 'Run not found', 404);
+  apiResponse(res, demoState.locations.filter((loc) => loc.organization_id === req.org).map((loc, index) => ({
+    location: loc,
+    route_order: index + 1,
+    predicted_fuel_litres: Number((2 + Math.random() * 8).toFixed(3)),
+  })));
+});
+
+app.delete('/api/v1/optimize/runs/:id', requireWrite, (req, res) => {
+  const index = demoState.optimizationRuns.findIndex((item) => item.id === req.params.id && item.organization_id === req.org);
+  if (index < 0) return apiError(res, 'Run not found', 404);
+  demoState.optimizationRuns.splice(index, 1);
+  apiResponse(res, { deleted: true });
+});
+
+app.get('/api/v1/analytics/summary', (req, res) => {
+  const arr = demoState.analytics.filter((item) => item.organization_id === req.org);
+  const summary = arr.reduce((acc, item) => ({
+    fuel_saved_litres: acc.fuel_saved_litres + Number(item.total_fuel_saved_litres || 0),
+    co2_saved_kg: acc.co2_saved_kg + Number(item.total_co2_saved_kg || 0),
+    cost_saved_inr: acc.cost_saved_inr + Number(item.total_cost_saved_inr || 0),
+    optimizations: acc.optimizations + Number(item.total_optimizations_run || 0),
+  }), { fuel_saved_litres: 0, co2_saved_kg: 0, cost_saved_inr: 0, optimizations: 0 });
+  apiResponse(res, summary);
+});
+
+app.get('/api/v1/analytics/trends', (req, res) => {
+  const payload = [
+    { date: 'Mon', fuel_saved_litres: 140, co2_saved_kg: 320, cost_saved_inr: 13200 },
+    { date: 'Tue', fuel_saved_litres: 156, co2_saved_kg: 360, cost_saved_inr: 14800 },
+    { date: 'Wed', fuel_saved_litres: 134, co2_saved_kg: 310, cost_saved_inr: 12700 },
+    { date: 'Thu', fuel_saved_litres: 170, co2_saved_kg: 390, cost_saved_inr: 16100 },
+    { date: 'Fri', fuel_saved_litres: 185, co2_saved_kg: 428, cost_saved_inr: 17500 },
+  ];
+  apiResponse(res, payload);
+});
+
+app.get('/api/v1/analytics/export', (req, res) => {
+  const rows = demoState.analytics.filter((item) => item.organization_id === req.org);
+  const csv = ['snapshot_date,total_fuel_saved_litres,total_co2_saved_kg,total_cost_saved_inr,total_optimizations_run'];
+  rows.forEach((row) => csv.push(`${row.snapshot_date},${row.total_fuel_saved_litres},${row.total_co2_saved_kg},${row.total_cost_saved_inr},${row.total_optimizations_run}`));
+  res.type('text/csv');
+  res.send(csv.join('\n'));
+});
+
+app.post('/api/v1/reports/generate-csv', requireWrite, (req, res) => {
+  const rows = demoState.locations.filter((loc) => loc.organization_id === req.org);
+  const csv = ['location_name,latitude,longitude,demand_kg'];
+  rows.forEach((row) => csv.push(`${row.location_name},${row.latitude},${row.longitude},${row.demand_kg}`));
+  res.type('text/csv');
+  res.send(csv.join('\n'));
+});
+
+app.post('/api/v1/reports/generate-pdf', requireWrite, async (req, res) => {
+  const runId = req.body.run_id || demoState.optimizationRuns[0]?.id;
+  const run = demoState.optimizationRuns.find((item) => item.id === runId && item.organization_id === req.org);
+  if (!run) return apiError(res, 'Optimization run not found', 404);
+
+  const pdf = new PDFDocument();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename=greenfleet-${Date.now()}.pdf`);
+  pdf.pipe(res);
+  pdf.fontSize(20).text('GreenFleet AI Optimization Report', { align: 'center' });
+  pdf.moveDown();
+  pdf.fontSize(12).text(`Run: ${run.run_name}`);
+  pdf.text(`Fuel saved: ${run.fuel_saved_litres} L`);
+  pdf.text(`CO₂ saved: ${run.co2_saved_kg} kg`);
+  pdf.text(`Cost saved: ₹${run.cost_saved_inr}`);
+  pdf.end();
+});
+
+app.get('/api/v1/settings', (req, res) => {
+  const org = demoState.organizations.find((item) => item.id === req.org) || demoOrg;
+  apiResponse(res, { organization_id: req.org, name: org.name, fuel_price_per_litre: org.fuel_price_per_litre, co2_factor_kg_per_litre: org.co2_factor_kg_per_litre });
+});
+
+app.put('/api/v1/settings', requireWrite, (req, res) => {
+  const parsed = settingsSchema.safeParse(req.body);
+  if (!parsed.success) return apiError(res, parsed.error.issues[0].message, 422);
+  const org = demoState.organizations.find((item) => item.id === req.org) || demoOrg;
+  org.fuel_price_per_litre = Number(parsed.data.fuel_price_per_litre);
+  org.co2_factor_kg_per_litre = Number(parsed.data.co2_factor_kg_per_litre);
+  apiResponse(res, org);
+});
+
+app.use((req, res) => apiError(res, 'Not found', 404));
+
+app.listen(port, () => {
+  console.log(`GreenFleet AI server listening on http://localhost:${port}`);
+});

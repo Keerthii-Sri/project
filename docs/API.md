@@ -1,12 +1,39 @@
 # API reference
 
-All endpoints are under `/api/v1`, require `Authorization: Bearer <Supabase access token>`, and return `{success,data,error}`.
+All endpoints under `/api/v1` return `{ success, data, error }`.
 
-- `GET/POST/PUT/DELETE /vehicles`, `/locations`
-- `POST /trips/generate-synthetic` with `{count}`
+Authentication: `Authorization: Bearer <token>`
+
+Core endpoints:
+- `GET /health`
+- `GET /vehicles`
+- `POST /vehicles`
+- `GET /vehicles/:id`
+- `PUT /vehicles/:id`
+- `DELETE /vehicles/:id`
+- `POST /vehicles/bulk-import`
+- `GET /locations`
+- `POST /locations`
+- `GET /locations/:id`
+- `PUT /locations/:id`
+- `DELETE /locations/:id`
+- `POST /locations/bulk-import`
+- `GET /trips`
+- `POST /trips`
+- `POST /trips/generate-synthetic`
 - `POST /ml/predict-fuel`
-- `POST /optimize/run` with `fuel_price`, `co2_factor`, `max_route_duration_minutes`, `objective`
-- `GET /optimize/runs`, `GET /optimize/runs/:id`
+- `POST /ml/predict-fuel-batch`
+- `POST /ml/train-model`
+- `GET /ml/model-info`
+- `POST /optimize/run`
+- `GET /optimize/runs`
+- `GET /optimize/runs/:id`
+- `GET /optimize/runs/:id/routes`
+- `DELETE /optimize/runs/:id`
 - `GET /analytics/summary`
-- `GET /settings`, `PUT /settings`
-- `POST /reports/generate-pdf` with `{run_id}`
+- `GET /analytics/trends`
+- `GET /analytics/export`
+- `POST /reports/generate-pdf`
+- `POST /reports/generate-csv`
+- `GET /settings`
+- `PUT /settings`

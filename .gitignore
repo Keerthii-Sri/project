@@ -1,6 +1,7 @@
 node_modules
 .env
-*.log
+.env.*
 client/dist
-server/generated
+server/.env
+*.log
 ml-models/*.pkl

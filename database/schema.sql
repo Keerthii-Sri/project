@@ -1,25 +1,225 @@
--- GreenFleet AI schema
+-- GreenFleet AI SQL schema
 create extension if not exists pgcrypto;
-create type public.app_role as enum ('admin','fleet_manager','viewer');
-create type public.run_status as enum ('running','completed','failed');
-create table if not exists organizations (id uuid primary key default gen_random_uuid(), name text not null, fuel_price_per_litre numeric(10,2) not null default 95, co2_factor_kg_per_litre numeric(8,3) not null default 2.31, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
-create table if not exists users (id uuid primary key references auth.users(id) on delete cascade, organization_id uuid not null references organizations(id) on delete cascade, role public.app_role not null default 'viewer', created_at timestamptz not null default now());
-create table if not exists locations (id uuid primary key default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, location_name text not null, address text, latitude double precision not null check(latitude between -90 and 90), longitude double precision not null check(longitude between -180 and 180), time_window_start time default '08:00', time_window_end time default '18:00', demand_kg numeric(10,2) not null default 0, priority integer not null default 1, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
-create table if not exists vehicles (id uuid primary key default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, vehicle_name text not null, vehicle_type text not null, capacity_kg numeric(10,2) not null check(capacity_kg>0), fuel_efficiency_km_per_litre numeric(8,3) not null check(fuel_efficiency_km_per_litre>0), base_location_id uuid references locations(id) on delete set null, is_active boolean not null default true, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
-create table if not exists trips (id uuid primary key default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, vehicle_id uuid references vehicles(id) on delete set null, location_id uuid references locations(id) on delete set null, distance_km numeric(10,2) not null, load_kg numeric(10,2) not null, avg_speed_kmh numeric(8,2) not null, traffic_level text not null check(traffic_level in ('low','medium','high')), actual_fuel_litres numeric(10,3), trip_date date not null default current_date, created_at timestamptz not null default now());
-create table if not exists optimization_runs (id uuid primary key default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, run_name text not null, total_vehicles integer not null, total_locations integer not null, total_fuel_before_litres numeric(12,3) not null default 0, total_fuel_after_litres numeric(12,3) not null default 0, fuel_saved_litres numeric(12,3) not null default 0, fuel_saved_percentage numeric(8,3) not null default 0, co2_saved_kg numeric(12,3) not null default 0, cost_saved_inr numeric(14,2) not null default 0, optimization_objective text not null, status public.run_status not null default 'running', insights jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), completed_at timestamptz);
-create table if not exists optimized_routes (id uuid primary key default gen_random_uuid(), optimization_run_id uuid not null references optimization_runs(id) on delete cascade, vehicle_id uuid not null references vehicles(id) on delete cascade, route_order integer not null, location_id uuid not null references locations(id) on delete cascade, predicted_fuel_litres numeric(10,3) not null, distance_km numeric(10,2) not null, estimated_duration_minutes numeric(10,2) not null, created_at timestamptz not null default now());
-create table if not exists analytics_snapshots (id uuid primary key default gen_random_uuid(), organization_id uuid not null references organizations(id) on delete cascade, snapshot_date date not null default current_date, total_fuel_saved_litres numeric(12,3) not null, total_co2_saved_kg numeric(12,3) not null, total_cost_saved_inr numeric(14,2) not null, total_optimizations_run integer not null default 1, created_at timestamptz not null default now());
-create index if not exists idx_org_locations on locations(organization_id); create index if not exists idx_org_vehicles on vehicles(organization_id); create index if not exists idx_org_trips on trips(organization_id); create index if not exists idx_org_runs on optimization_runs(organization_id); create index if not exists idx_routes_run on optimized_routes(optimization_run_id); create index if not exists idx_org_analytics on analytics_snapshots(organization_id);
-create or replace function public.my_org() returns uuid language sql stable security definer set search_path=public as $$ select organization_id from public.users where id=auth.uid() $$;
-create or replace function public.my_role() returns public.app_role language sql stable security definer set search_path=public as $$ select role from public.users where id=auth.uid() $$;
-alter table organizations enable row level security; alter table users enable row level security; alter table vehicles enable row level security; alter table locations enable row level security; alter table trips enable row level security; alter table optimization_runs enable row level security; alter table optimized_routes enable row level security; alter table analytics_snapshots enable row level security;
-create policy org_read on organizations for select using(id=public.my_org()); create policy org_admin on organizations for update using(id=public.my_org() and public.my_role()='admin');
-create policy users_org on users for select using(organization_id=public.my_org()); create policy users_admin on users for all using(organization_id=public.my_org() and public.my_role()='admin');
--- Shared organization read; write is admin/fleet_manager.
-create policy vehicles_read on vehicles for select using(organization_id=public.my_org()); create policy vehicles_write on vehicles for all using(organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')) with check(organization_id=public.my_org());
-create policy locations_read on locations for select using(organization_id=public.my_org()); create policy locations_write on locations for all using(organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')) with check(organization_id=public.my_org());
-create policy trips_read on trips for select using(organization_id=public.my_org()); create policy trips_write on trips for all using(organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')) with check(organization_id=public.my_org());
-create policy runs_read on optimization_runs for select using(organization_id=public.my_org()); create policy runs_write on optimization_runs for all using(organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')) with check(organization_id=public.my_org());
-create policy routes_read on optimized_routes for select using(exists(select 1 from optimization_runs r where r.id=optimization_run_id and r.organization_id=public.my_org())); create policy routes_write on optimized_routes for all using(exists(select 1 from optimization_runs r where r.id=optimization_run_id and r.organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')));
-create policy analytics_read on analytics_snapshots for select using(organization_id=public.my_org()); create policy analytics_write on analytics_snapshots for all using(organization_id=public.my_org() and public.my_role() in ('admin','fleet_manager')) with check(organization_id=public.my_org());
+
+create type app_role as enum ('admin', 'fleet_manager', 'viewer');
+create type run_status as enum ('running', 'completed', 'failed');
+
+create table if not exists organizations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  fuel_price_per_litre numeric(10,2) not null default 95,
+  co2_factor_kg_per_litre numeric(8,3) not null default 2.31,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists users (
+  id uuid primary key references auth.users(id) on delete cascade,
+  organization_id uuid not null references organizations(id) on delete cascade,
+  role app_role not null default 'viewer',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists locations (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  location_name text not null,
+  address text,
+  latitude double precision not null check (latitude between -90 and 90),
+  longitude double precision not null check (longitude between -180 and 180),
+  time_window_start time default '08:00',
+  time_window_end time default '18:00',
+  demand_kg numeric(10,2) not null default 0,
+  priority integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists vehicles (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  vehicle_name text not null,
+  vehicle_type text not null,
+  capacity_kg numeric(10,2) not null check (capacity_kg > 0),
+  fuel_efficiency_km_per_litre numeric(8,3) not null check (fuel_efficiency_km_per_litre > 0),
+  base_location_id uuid references locations(id) on delete set null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists trips (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  vehicle_id uuid references vehicles(id) on delete set null,
+  location_id uuid references locations(id) on delete set null,
+  distance_km numeric(10,2) not null,
+  load_kg numeric(10,2) not null,
+  avg_speed_kmh numeric(8,2) not null,
+  traffic_level text not null check (traffic_level in ('low', 'medium', 'high')),
+  actual_fuel_litres numeric(10,3),
+  trip_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists optimization_runs (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  run_name text not null,
+  total_vehicles integer not null,
+  total_locations integer not null,
+  total_fuel_before_litres numeric(12,3) not null default 0,
+  total_fuel_after_litres numeric(12,3) not null default 0,
+  fuel_saved_litres numeric(12,3) not null default 0,
+  fuel_saved_percentage numeric(8,3) not null default 0,
+  co2_saved_kg numeric(12,3) not null default 0,
+  cost_saved_inr numeric(14,2) not null default 0,
+  optimization_objective text not null,
+  status run_status not null default 'running',
+  insights jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+create table if not exists optimized_routes (
+  id uuid primary key default gen_random_uuid(),
+  optimization_run_id uuid not null references optimization_runs(id) on delete cascade,
+  vehicle_id uuid not null references vehicles(id) on delete cascade,
+  route_order integer not null,
+  location_id uuid not null references locations(id) on delete cascade,
+  predicted_fuel_litres numeric(10,3) not null,
+  distance_km numeric(10,2) not null,
+  estimated_duration_minutes numeric(10,2) not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists analytics_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  snapshot_date date not null default current_date,
+  total_fuel_saved_litres numeric(12,3) not null,
+  total_co2_saved_kg numeric(12,3) not null,
+  total_cost_saved_inr numeric(14,2) not null,
+  total_optimizations_run integer not null default 1,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_org_locations on locations(organization_id);
+create index if not exists idx_org_vehicles on vehicles(organization_id);
+create index if not exists idx_org_trips on trips(organization_id);
+create index if not exists idx_org_runs on optimization_runs(organization_id);
+create index if not exists idx_routes_run on optimized_routes(optimization_run_id);
+create index if not exists idx_org_analytics on analytics_snapshots(organization_id);
+
+create or replace function public.my_org() returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select organization_id from public.users where id = auth.uid();
+$$;
+
+create or replace function public.my_role() returns app_role
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select role from public.users where id = auth.uid();
+$$;
+
+alter table organizations enable row level security;
+alter table users enable row level security;
+alter table locations enable row level security;
+alter table vehicles enable row level security;
+alter table trips enable row level security;
+alter table optimization_runs enable row level security;
+alter table optimized_routes enable row level security;
+alter table analytics_snapshots enable row level security;
+
+create policy org_read on organizations
+for select
+using (id = public.my_org());
+
+create policy org_admin_update on organizations
+for update
+using (id = public.my_org() and public.my_role() = 'admin');
+
+create policy users_org_policy on users
+for select
+using (organization_id = public.my_org());
+
+create policy users_admin_policy on users
+for all
+using (organization_id = public.my_org() and public.my_role() = 'admin')
+with check (organization_id = public.my_org() and public.my_role() = 'admin');
+
+create policy vehicles_read on vehicles
+for select
+using (organization_id = public.my_org());
+
+create policy vehicles_write on vehicles
+for all
+using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
+
+create policy locations_read on locations
+for select
+using (organization_id = public.my_org());
+
+create policy locations_write on locations
+for all
+using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
+
+create policy trips_read on trips
+for select
+using (organization_id = public.my_org());
+
+create policy trips_write on trips
+for all
+using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
+
+create policy runs_read on optimization_runs
+for select
+using (organization_id = public.my_org());
+
+create policy runs_write on optimization_runs
+for all
+using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
+
+create policy routes_read on optimized_routes
+for select
+using (
+  exists (
+    select 1 from optimization_runs r
+    where r.id = optimized_routes.optimization_run_id and r.organization_id = public.my_org()
+  )
+);
+
+create policy routes_write on optimized_routes
+for all
+using (
+  exists (
+    select 1 from optimization_runs r
+    where r.id = optimized_routes.optimization_run_id and r.organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager')
+  )
+)
+with check (
+  exists (
+    select 1 from optimization_runs r
+    where r.id = optimized_routes.optimization_run_id and r.organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager')
+  )
+);
+
+create policy analytics_read on analytics_snapshots
+for select
+using (organization_id = public.my_org());
+
+create policy analytics_write on analytics_snapshots
+for all
+using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
