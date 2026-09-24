@@ -1,10 +1,7 @@
 # API reference
 
-All endpoints under `/api/v1` return `{ success, data, error }`.
+Base path: `/api/v1`
 
-Authentication: `Authorization: Bearer <token>`
-
-Core endpoints:
 - `GET /health`
 - `GET /vehicles`
 - `POST /vehicles`
@@ -37,3 +34,5 @@ Core endpoints:
 - `POST /reports/generate-csv`
 - `GET /settings`
 - `PUT /settings`
+
+All responses follow `{ success, data, error }`.

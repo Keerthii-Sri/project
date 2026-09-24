@@ -1,4 +1,4 @@
--- GreenFleet AI SQL schema
+# GreenFleet AI SQL schema
 create extension if not exists pgcrypto;
 
 create type app_role as enum ('admin', 'fleet_manager', 'viewer');
@@ -162,7 +162,7 @@ using (organization_id = public.my_org());
 create policy vehicles_write on vehicles
 for all
 using (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'))
-with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager'));
+with check (organization_id = public.my_org() and public.my_role() in ('admin', 'fleet_manager')); 
 
 create policy locations_read on locations
 for select

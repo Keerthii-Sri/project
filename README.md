@@ -1,50 +1,58 @@
 # GreenFleet AI
 
-GreenFleet AI is a production-oriented logistics intelligence platform for Indian SMEs. It predicts trip fuel consumption with an XGBoost-style regressor, schedules vehicles with OR-Tools-inspired optimization, and tracks CO₂ and cost reductions across an organization.
+GreenFleet AI is a demo-ready fleet intelligence platform for Indian logistics SMEs. It predicts trip fuel use, optimizes vehicle-to-route assignments with a quantum-inspired OR-Tools-based routing strategy, and tracks CO₂ and cost savings across an organization.
 
 ## Features
 
-- Fuel prediction for trip-level fuel consumption
-- Quantum-inspired VRP optimization with capacity and duration-aware assignments
-- CO₂ and cost tracking using configurable fuel price and CO₂ factors
-- CRUD for vehicles and locations with CSV import and map view
-- Dashboard, analytics, and route detail pages
-- Secure organization-scoped access and demo-ready data seed
-- PDF and CSV exports for reports
+- XGBoost-style fuel prediction engine for trip-level estimates
+- Quantum-inspired VRP optimization for route assignment
+- Real-time CO₂ and cost calculators with configurable fuel price and emissions factor
+- CRUD for fleet and locations with CSV bulk import support
+- Interactive route and analytics views
+- Org-scoped auth and role model
+- PDF and CSV report generation
 
 ## Local setup
 
-1. Install dependencies at the repo root:
+1. Install root dependencies:
    npm install
-2. Install server and client dependencies:
-   npm --prefix server install
+2. Install frontend and backend dependencies:
    npm --prefix client install
-3. Copy `.env.example` to `.env` and set environment values if you want Supabase/Gemini enabled.
-4. Start the app:
+   npm --prefix server install
+3. Copy `.env.example` to a local `.env` and update values.
+4. Run the app:
    npm run dev
-5. Open http://localhost:5173
+5. Visit http://localhost:5173
 
-## Supabase setup
+## Environment setup
 
-1. Create a Supabase project.
-2. Run `database/schema.sql` in the Supabase SQL editor.
-3. Add auth redirect URL `http://localhost:5173/dashboard`.
-4. Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` in the environment.
+Set environment variables in a `.env` file at the repo root or in `server/.env` depending on deployment. The example file is:
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `GEMINI_API_KEY`
+- `NODE_ENV`
+- `PORT`
+- `VITE_APP_URL`
+- `DEFAULT_FUEL_PRICE_PER_LITRE`
+- `DEFAULT_CO2_FACTOR_KG_PER_LITRE`
+- `JWT_SECRET`
 
 ## Hackathon Demo Steps
 
-1. Sign up or sign in to the app.
-2. Go to `/optimize` and click “Load demo data & run optimization”.
-3. Watch the optimizer assign routes while the dashboard updates fuel, CO₂, and cost impacts.
-4. View route detail pages and analytics to show the improvements.
-5. Export the PDF or CSV report for the executive summary.
+1. Open the app and sign up or log in.
+2. Go to the Optimize page and choose the demo flow.
+3. Click “Load demo data & run optimization”.
+4. Review the dashboard, route details, and analytics for savings and emissions reduction.
+5. Export the report as CSV or PDF.
 
-This flow is designed to be completed in less than 3 minutes.
+This flow is designed to run in under 3 minutes without any manual database editing.
 
-## Folder structure
+## Project structure
 
-- client/ — React + Vite + Tailwind frontend
-- server/ — Express backend with services and routes
-- database/ — SQL schema and seed scripts
-- ml-models/ — training script and model artifact flow
-- docs/ — API and deployment notes
+- `client/` — Vite + React frontend
+- `server/` — Express API and services
+- `database/` — PostgreSQL schema and seed SQL
+- `ml-models/` — XGBoost training script and model artifact placeholder
+- `docs/` — API and deployment notes

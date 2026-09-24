@@ -1,12 +1,11 @@
 # Deployment notes
 
-Use Node 18+, Vite 5+, and a Supabase project for production.
+For local runs:
 
-Recommended flow:
-- Deploy server to Render, Railway, or a VM.
-- Deploy client to Vercel or Netlify.
-- Point `VITE_APP_URL` and `CORS` origin to the same frontend domain.
-- Store secrets in environment variables and use a managed DB.
-- Keep Supabase service-role key on the backend only.
+- Start the server at `http://localhost:3000`
+- Start the client at `http://localhost:5173`
+- Use `VITE_APP_URL` to match the frontend host
+- Keep the Supabase service role key on the backend only
+- Use HTTPS in production and put secrets in environment variables
 
-For local testing without a live Supabase project, the server runs in demo mode with in-memory project data so the app remains functional.
+This app ships with a demo fallback mode so it can run without any external database connection during hackathon demos.

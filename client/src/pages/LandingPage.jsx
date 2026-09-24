@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 const metrics = [
-  { title: 'Predictive fuel savings', value: '10-15%', desc: 'Per trip AI forecasts and route balancing' },
-  { title: 'CO₂ reduction', value: 'up to 28%', desc: 'Diesel-to-route optimization with clean dispatching' },
-  { title: 'Faster planning', value: 'AI + OR-Tools', desc: 'Smart route assignment and time window awareness' },
+  { title: 'Predictive fuel savings', value: '10–15%', detail: 'Trip-level forecasting and route balancing with predictive dispatch.' },
+  { title: 'CO₂ reduction', value: 'Up to 28%', detail: 'Lower diesel burn and smarter route grouping across the fleet.' },
+  { title: 'Faster planning', value: 'AI + VRP', detail: 'Use optimization to rebalance vehicles and reduce empty miles.' },
 ];
 
 export default function LandingPage() {
@@ -25,11 +24,11 @@ export default function LandingPage() {
           </span>
           <h1 className="mt-6 text-5xl font-black leading-tight text-slate-900">Predict fuel, assign smarter routes, cut CO₂.</h1>
           <p className="mt-4 max-w-xl text-lg text-slate-600">
-            GreenFleet AI helps Indian logistics SMEs predict trip fuel usage, optimize vehicle assignments, and reduce costs with data-driven routing.
+            GreenFleet AI helps Indian logistics SMEs forecast trip fuel use, optimize vehicle assignment, and reduce cost and carbon across the fleet.
           </p>
           <div className="mt-8 flex gap-4">
             <Link to="/signup" className="btn">Start free demo</Link>
-            <Link to="/login" className="btn-secondary">View dashboard</Link>
+            <Link to="/login" className="btn-secondary">Open dashboard</Link>
           </div>
         </div>
 
@@ -41,7 +40,7 @@ export default function LandingPage() {
             </div>
             <div className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-700">-12.4%</div>
           </div>
-          <div className="h-64 rounded-xl bg-gradient-to-br from-emerald-200 via-sky-100 to-slate-100 p-4 text-sm text-slate-700">
+          <div className="h-64 rounded-xl bg-gradient-to-br from-emerald-200 via-sky-100 to-slate-100 p-4">
             <div className="flex h-full items-end justify-between gap-2">
               {[70, 86, 72, 58, 90, 66, 48].map((height, index) => (
                 <div key={index} className="w-full rounded-t-xl bg-emerald-600/85" style={{ height: `${height}%` }} />
@@ -56,7 +55,7 @@ export default function LandingPage() {
           <div key={metric.title} className="card">
             <div className="text-sm text-slate-500">{metric.title}</div>
             <div className="mt-4 text-3xl font-black text-slate-900">{metric.value}</div>
-            <p className="mt-3 text-sm text-slate-600">{metric.desc}</p>
+            <p className="mt-3 text-sm text-slate-600">{metric.detail}</p>
           </div>
         ))}
       </section>

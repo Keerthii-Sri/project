@@ -2,7 +2,10 @@
   "name": "greenfleet-ai",
   "private": true,
   "version": "1.0.0",
-  "workspaces": ["client", "server"],
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "dev": "concurrently \"npm --prefix client run dev\" \"npm --prefix server run dev\"",
     "build": "npm --prefix client run build",

@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 
-const nav = [
+const navItems = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/fleet', label: 'Fleet' },
   { to: '/locations', label: 'Locations' },
@@ -15,8 +15,8 @@ export default function Layout() {
   const signOut = useAuthStore((state) => state.signOut);
 
   const handleSignOut = () => {
-    signOut();
     localStorage.removeItem('greenfleet-demo-session');
+    signOut();
     navigate('/login');
   };
 
@@ -24,11 +24,9 @@ export default function Layout() {
     <div className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-emerald-900 text-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="text-xl font-bold">🌿 GreenFleet AI</div>
-          </div>
-          <nav className="hidden gap-4 md:flex">
-            {nav.map((item) => (
+          <div className="text-xl font-black">🌿 GreenFleet AI</div>
+          <nav className="hidden gap-5 md:flex">
+            {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
